@@ -2,6 +2,22 @@
 
 Troque a música de um vídeo do YouTube por um arquivo do seu PC, alinhando pelo espectrograma.
 
+## Como baixar e instalar (Linux)
+
+1. Abra a página de **[Releases](https://github.com/paulocremas/portinho/releases/latest)** e baixe
+   o arquivo **`portinho_1.0.0_amd64.deb`**.
+2. Na pasta *Downloads*, dê **dois cliques** no arquivo e clique em **Instalar** (vai pedir sua senha).
+   Pelo terminal: `sudo apt install ~/Downloads/portinho_1.0.0_amd64.deb`
+3. Abra o **Portinho** pelo menu de aplicativos.
+
+**Sem senha de administrador:** baixe `portinho_1.0.0_linux_x86_64.tar.gz`, clique com o botão direito
+→ *Extrair aqui*, entre na pasta `portinho` e dê dois cliques em **`instalar.sh`** (escolha *Executar*).
+
+Depois de instalado, o Portinho avisa sozinho quando sair uma versão nova.
+*Windows: em breve.*
+
+## Como usar
+
 1. **Vídeo** — cole o link do YouTube e clique *Carregar* (ou arraste um vídeo do PC para a janela).
    O vídeo é baixado direto, sem anúncios, e toca **sem o som original**.
 2. **Música** — arraste o arquivo (WAV, MP3, FLAC, OGG, M4A…) para a janela ou clique na área tracejada.
