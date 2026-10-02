@@ -7,7 +7,7 @@ import time
 from collections import deque
 
 import numpy as np
-from PySide6.QtCore import QObject, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QIcon, QKeySequence, QShortcut
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
@@ -17,9 +17,10 @@ from PySide6.QtWidgets import (
     QStackedWidget, QVBoxLayout, QWidget,
 )
 
-from . import audio, theme
+from . import __version__, audio, icons, theme
 from .player import MusicPlayer
 from .timeline import Timeline, fmt_delta, fmt_time
+from .videowindow import VideoWindow
 
 APP_NAME = "Portinho"
 SYNC_TOLERANCE = 0.040   # s de diferença antes de ressincronizar a música
@@ -107,6 +108,8 @@ class MainWindow(QMainWindow):
         self.vplayer.durationChanged.connect(self._on_video_duration)
         self.vplayer.errorOccurred.connect(lambda _e, msg: msg and self._on_error(f"Vídeo: {msg}"))
         self.mplayer = MusicPlayer()
+        self.vwin = None             # janela separada do vídeo (flutuante / tela cheia)
+        self.video_out = False
 
         self.playing = False
         self._clock_t0 = 0.0
@@ -224,6 +227,23 @@ class MainWindow(QMainWindow):
         ph.setStyleSheet("background:#0a0b0f; border-radius:14px;")
         self.video_stack.addWidget(ph)
         self.video_stack.addWidget(self.video_widget)
+        away = QWidget()
+        away.setStyleSheet("background:#0a0b0f; border-radius:14px;")
+        al = QVBoxLayout(away)
+        al.addStretch(1)
+        msg = QLabel("O vídeo está em outra janela")
+        msg.setObjectName("placeholder")
+        msg.setAlignment(Qt.AlignCenter)
+        al.addWidget(msg)
+        back = QPushButton("  Trazer o vídeo de volta")
+        back.setIcon(icons.make("dock"))
+        back.setIconSize(QSize(18, 18))
+        back.setCursor(Qt.PointingHandCursor)
+        back.clicked.connect(self.close_video_window)
+        al.addWidget(back, 0, Qt.AlignCenter)
+        al.addStretch(1)
+        self.video_stack.addWidget(away)
+        self.video_widget.installEventFilter(self)
         split.addWidget(self.video_stack)
 
         bottom = card()
@@ -244,6 +264,20 @@ class MainWindow(QMainWindow):
         self.time_label.setObjectName("time")
         self.time_label.setMinimumWidth(self.time_label.fontMetrics().horizontalAdvance("00:00.000 / 00:00") + 40)
         tr.addWidget(self.time_label)
+        self.btn_full = QPushButton()
+        self.btn_full.setObjectName("icon")
+        self.btn_full.setIcon(icons.make("fullscreen"))
+        self.btn_full.setIconSize(QSize(18, 18))
+        self.btn_full.setToolTip("Tela cheia (F ou duplo clique no vídeo)")
+        self.btn_full.clicked.connect(self.fullscreen_video)
+        self.btn_pop = QPushButton()
+        self.btn_pop.setObjectName("icon")
+        self.btn_pop.setIcon(icons.make("popup"))
+        self.btn_pop.setIconSize(QSize(18, 18))
+        self.btn_pop.setToolTip("Abrir o vídeo numa janela separada (feche-a para voltar)")
+        self.btn_pop.clicked.connect(self.popout_video)
+        tr.addWidget(self.btn_full)
+        tr.addWidget(self.btn_pop)
         tr.addStretch(1)
 
         lbl = QLabel("Deslocamento da música")
@@ -337,7 +371,7 @@ class MainWindow(QMainWindow):
         bl.addWidget(self.timeline, 1)
 
         hint = QLabel("Arrastar = mover  ·  Shift = ajuste fino  ·  Ctrl = sem ímã  ·  clique = ir para o ponto  ·  "
-                      "roda = zoom  ·  Shift+roda / botão direito = rolar  ·  Espaço = tocar  ·  ←/→ = 10 ms  ·  Ctrl+Z = desfazer")
+                      "roda = zoom  ·  Shift+roda / botão direito = rolar  ·  Espaço = tocar  ·  ←/→ = 10 ms  ·  Ctrl+Z = desfazer  ·  F = tela cheia")
         hint.setObjectName("hint")
         hint.setMinimumWidth(10)
         bl.addWidget(hint)
@@ -374,6 +408,8 @@ class MainWindow(QMainWindow):
         has_m = self.mplayer.data is not None
         both = self.video_flux is not None and self.music_flux is not None
         self.btn_play.setEnabled(has_v or has_m)
+        self.btn_full.setEnabled(has_v)
+        self.btn_pop.setEnabled(has_v)
         for w in (self.offset_spin, self.btn_minus, self.btn_plus):
             w.setEnabled(has_m)
         self.btn_auto.setEnabled(both and "align" not in self.busy)
@@ -386,6 +422,64 @@ class MainWindow(QMainWindow):
             if badge.property("done") != done:
                 badge.setProperty("done", done)
                 repolish(badge)
+
+    # ================================================================ vídeo fora da janela
+    def _ensure_vwin(self):
+        if self.vwin is None:
+            self.vwin = VideoWindow(self)
+        return self.vwin
+
+    def _move_video_out(self):
+        if not self.video_out:
+            self.video_out = True
+            self.vplayer.setVideoOutput(self._ensure_vwin().video)
+            self.video_stack.setCurrentIndex(2)
+            self._refresh_frame()
+
+    def popout_video(self):
+        if not self.video_path:
+            return
+        self._move_video_out()
+        self.vwin.open_popup()
+
+    def fullscreen_video(self):
+        if not self.video_path:
+            return
+        self._move_video_out()
+        self.vwin.open_fullscreen()
+
+    def toggle_fullscreen(self):
+        if self.vwin is not None and self.vwin.mode == "fullscreen":
+            self.vwin.exit_fullscreen()
+        else:
+            self.fullscreen_video()
+
+    def close_video_window(self):
+        if self.vwin is not None and self.vwin.isVisible():
+            self.vwin.close()          # closeEvent chama dock_video()
+        else:
+            self.dock_video()
+
+    def dock_video(self):
+        """Volta o vídeo para a janela principal (chamado ao fechar a janela separada)."""
+        if not self.video_out:
+            return
+        self.video_out = False
+        self.vplayer.setVideoOutput(self.video_widget)
+        self.video_stack.setCurrentIndex(1 if self.video_path else 0)
+        self._refresh_frame()
+        self.activateWindow()
+
+    def _refresh_frame(self):
+        # pausado, a nova superfície ficaria preta até o próximo quadro: pede o quadro atual
+        if self.video_path and not self.playing:
+            self.vplayer.setPosition(self.vplayer.position())
+
+    def eventFilter(self, obj, e):
+        if obj is self.video_widget and e.type() == QEvent.MouseButtonDblClick:
+            self.fullscreen_video()
+            return True
+        return super().eventFilter(obj, e)
 
     # ================================================================ status
     def _on_status(self, msg):
@@ -529,7 +623,7 @@ class MainWindow(QMainWindow):
         self.timeline.video.image = None
         self.timeline.suggestion = None
         self.vplayer.setSource(QUrl.fromLocalFile(path))
-        self.video_stack.setCurrentIndex(1)
+        self.video_stack.setCurrentIndex(2 if self.video_out else 1)
         self.video_info.setText(f"✓  {title}")
         self.video_info.setToolTip(path)
         self.bridge.status.emit("Lendo o áudio do vídeo…")
@@ -812,7 +906,11 @@ class MainWindow(QMainWindow):
             tl.playhead = t
             tl.update()
         dur = self.total_duration()
-        self.time_label.setText(f"{fmt_time(t)}  /  {fmt_time(dur, ms=False)}" if dur else fmt_time(t))
+        txt = f"{fmt_time(t)}  /  {fmt_time(dur, ms=False)}" if dur else fmt_time(t)
+        self.time_label.setText(txt)
+        if self.vwin is not None and self.vwin.isVisible():
+            self.vwin.time.setText(txt)
+            self.vwin.btn_play.setText("❚❚" if self.playing else "▶")
 
     # ================================================================ exportar
     def export(self):
@@ -878,6 +976,10 @@ class MainWindow(QMainWindow):
             self.nudge(step)
         elif e.key() == Qt.Key_Home:
             self.seek(0.0)
+        elif e.key() in (Qt.Key_F, Qt.Key_F11):
+            self.toggle_fullscreen()
+        elif e.key() == Qt.Key_Escape and self.vwin is not None and self.vwin.mode == "fullscreen":
+            self.vwin.exit_fullscreen()
         else:
             super().keyPressEvent(e)
 
@@ -889,28 +991,23 @@ class MainWindow(QMainWindow):
         super().mousePressEvent(e)
 
     def closeEvent(self, e):
+        if self.vwin is not None:
+            self.vwin.main = None
+            self.vwin.hide()
+            self.vwin.deleteLater()
         self.mplayer.close()
         self.vplayer.stop()
         super().closeEvent(e)
 
 
-def main():
-    app = QApplication(sys.argv)
-    app.setApplicationName(APP_NAME)
-    app.setDesktopFileName("portinho")
-    theme.apply(app)
-    for base in (audio.resource_dir(), os.path.join(os.path.dirname(__file__), "..")):
-        icon = os.path.join(base, "assets", "icon.png")
-        if os.path.exists(icon):
-            app.setWindowIcon(QIcon(icon))
-            break
+def _open_main(argv):
     w = MainWindow()
     if w._start_maximized:
         w.showMaximized()
     else:
         w.show()
     # arquivos/links passados na linha de comando ("Abrir com…" do gerenciador de arquivos)
-    for arg in sys.argv[1:]:
+    for arg in argv:
         if arg.startswith("http"):
             w.url_edit.setText(arg)
             w.download()
@@ -920,4 +1017,32 @@ def main():
                 w.load_music(os.path.abspath(arg))
             elif ext in VIDEO_EXT:
                 w.load_video(os.path.abspath(arg), os.path.basename(arg))
+    return w
+
+
+def main():
+    app = QApplication(sys.argv)
+    app.setApplicationName(APP_NAME)
+    app.setApplicationVersion(__version__)
+    app.setDesktopFileName("portinho")
+    theme.apply(app)
+    icon_path = None
+    for base in (audio.resource_dir(), os.path.join(os.path.dirname(__file__), "..")):
+        icon = os.path.join(base, "assets", "icon.png")
+        if os.path.exists(icon):
+            icon_path = icon
+            app.setWindowIcon(QIcon(icon))
+            break
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    holder = {}
+
+    def go():
+        holder["w"] = _open_main(args)
+
+    if "--no-update" in sys.argv or os.environ.get("PORTINHO_NO_UPDATE"):
+        go()
+    else:
+        from .splash import Splash
+        holder["splash"] = Splash(go, icon_path)
+        holder["splash"].start()
     sys.exit(app.exec())

@@ -1,9 +1,8 @@
 @echo off
-REM Gera:  dist\Portinho-Setup-1.0.0.exe  (instalador)  e  dist\Portinho.exe  (portatil)
+REM Gera:  dist\Portinho-Setup-<versao>.exe  (instalador)  e  dist\Portinho.exe  (portatil)
 REM Requer Python 3.11+ (python.org). O instalador requer Inno Setup 6 (jrsoftware.org).
 setlocal
 cd /d "%~dp0"
-set VERSION=1.0.0
 
 if not exist .venv (
     py -3 -m venv .venv || python -m venv .venv || goto :erro
@@ -11,6 +10,10 @@ if not exist .venv (
 call .venv\Scripts\activate.bat
 python -m pip install --upgrade pip
 pip install -r requirements.txt || goto :erro
+for /f %%v in ('python -c "import portinho; print(portinho.__version__)"') do set VERSION=%%v
+set QT_QPA_PLATFORM=offscreen
+python packaging\make_icon.py || goto :erro
+set QT_QPA_PLATFORM=
 
 REM Deno: necessario para o yt-dlp abrir os videos do YouTube
 if not exist build\deno\deno.exe (

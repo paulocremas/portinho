@@ -22,6 +22,11 @@ UninstallDisplayIcon={app}\Portinho.exe
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
+WizardImageFile=..\assets\wizard.bmp
+WizardSmallImageFile=..\assets\wizard_small.bmp
+; fecha o Portinho aberto antes de trocar os arquivos (usado na atualização automática)
+CloseApplications=force
+RestartApplications=no
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 
@@ -42,3 +47,5 @@ Name: "{autodesktop}\Portinho"; Filename: "{app}\Portinho.exe"; Tasks: desktopic
 
 [Run]
 Filename: "{app}\Portinho.exe"; Description: "{cm:LaunchProgram,Portinho}"; Flags: nowait postinstall skipifsilent
+; atualização automática (/SILENT): reabre o Portinho sozinho no final
+Filename: "{app}\Portinho.exe"; Flags: nowait skipifnotsilent

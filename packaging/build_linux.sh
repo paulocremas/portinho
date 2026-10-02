@@ -2,7 +2,6 @@
 # Gera dist/portinho/ (app), dist/portinho_<versão>_amd64.deb (instalador) e um .tar.gz portátil.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-VERSION="${VERSION:-1.0.0}"
 PY=".venv/bin/python"
 
 if [ ! -x "$PY" ]; then
@@ -19,6 +18,7 @@ if [ ! -x build/deno/deno ]; then
     (cd build/deno && unzip -oq deno.zip && rm deno.zip)
 fi
 
+VERSION=$("$PY" -c "import portinho; print(portinho.__version__)")
 QT_QPA_PLATFORM=offscreen "$PY" packaging/make_icon.py >/dev/null
 
 "$PY" -m PyInstaller --noconfirm --clean --onedir --windowed --name portinho \
@@ -78,8 +78,16 @@ POST
 chmod 755 "$PKG/DEBIAN/postinst"
 fakeroot dpkg-deb --build -Zxz "$PKG" "dist/portinho_${VERSION}_amd64.deb" >/dev/null
 
-# ---------- portátil ----------
-tar -C dist -czf "dist/portinho_${VERSION}_linux_x86_64.tar.gz" portinho
+# ---------- portátil (com instalador gráfico) ----------
+rm -rf build/tar && mkdir -p build/tar
+cp -al dist/portinho build/tar/portinho
+cat > build/tar/portinho/instalar.sh <<'INST'
+#!/bin/sh
+# Instala o Portinho no seu usuário (menu de aplicativos), com tela de progresso. Não pede senha.
+exec "$(dirname "$(readlink -f "$0")")/portinho" --install
+INST
+chmod 755 build/tar/portinho/instalar.sh
+tar -C build/tar -czf "dist/portinho_${VERSION}_linux_x86_64.tar.gz" portinho
 
 echo
 echo "Pronto:"

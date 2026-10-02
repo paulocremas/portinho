@@ -60,6 +60,7 @@ music = os.path.join(OUT, "musica_teste.wav")
 subprocess.run([audio.ffmpeg_exe(), "-y", "-v", "error", "-i", VIDEO, "-vn",
                 "-af", f"adelay={int(SHIFT*1000)}|{int(SHIFT*1000)}", "-ar", "44100", music], check=True)
 
+os.environ['PORTINHO_NO_UPDATE'] = '1'
 w = MainWindow()
 w.resize(1280, 860)
 w.show()
@@ -249,6 +250,77 @@ check("seta → (+10 ms) aplicou", abs(d) < 0.08)
 QTest.keyClick(w, Qt.Key_Space)
 pump(0.1)
 check("Espaço pausou", not w.playing)
+
+print("\n[tela cheia e janela flutuante — sem atrapalhar a reprodução]")
+w.seek(2.0)
+pump(0.2)
+w.play()
+pump(0.8)
+
+
+def sync_ok(label):
+    pump(0.6)
+    d = w.mplayer.time() - (w.current_time() + w.music_delta())
+    check(f"{label}: continua tocando", w.playing and w.vplayer.playbackState() == w.vplayer.PlaybackState.PlayingState)
+    check(f"{label}: música sincronizada", abs(d) < 0.08, f"{d*1000:.0f} ms")
+
+
+def no_jump(fn, label):
+    t0, c0 = w.current_time(), time.perf_counter()
+    fn()
+    pump(0.5)
+    adv, real = w.current_time() - t0, time.perf_counter() - c0
+    check(f"{label}: vídeo não pulou nem travou", abs(adv - real) < 0.15, f"andou {adv:.2f}s em {real:.2f}s")
+
+
+no_jump(w.popout_video, "abrir janela flutuante")
+check("janela flutuante aberta", w.vwin.isVisible() and w.vwin.mode == "popup")
+check("principal mostra 'vídeo em outra janela'", w.video_stack.currentIndex() == 2)
+sync_ok("janela flutuante")
+w.vwin.grab().save(os.path.join(OUT, "5_janela_flutuante.png"))
+no_jump(w.vwin.close, "fechar janela flutuante")
+check("ao fechar, vídeo voltou para a principal", not w.video_out and w.video_stack.currentIndex() == 1)
+sync_ok("depois de fechar")
+
+no_jump(w.fullscreen_video, "tela cheia")
+check("tela cheia aberta", w.vwin.mode == "fullscreen" and w.vwin.isVisible())
+sync_ok("tela cheia")
+QTest.keyClick(w.vwin, Qt.Key_Escape)
+pump(0.2)
+check("Esc saiu da tela cheia e voltou para a principal", not w.video_out and not w.vwin.isVisible())
+
+w.popout_video()
+pump(0.2)
+QTest.keyClick(w.vwin, Qt.Key_F)
+pump(0.2)
+check("F na janela flutuante: tela cheia", w.vwin.mode == "fullscreen")
+QTest.keyClick(w.vwin, Qt.Key_Escape)
+pump(0.2)
+check("Esc volta para a janela flutuante (de onde veio)", w.vwin.mode == "popup" and w.vwin.isVisible() and w.video_out)
+sync_ok("ida e volta da tela cheia")
+QTest.keyClick(w.vwin, Qt.Key_Space)
+pump(0.1)
+check("Espaço na janela do vídeo pausa", not w.playing)
+QTest.keyClick(w.vwin, Qt.Key_Space)
+pump(0.1)
+check("Espaço de novo volta a tocar", w.playing)
+w.vwin.btn_back.click()
+pump(0.2)
+check("botão 'Voltar' devolve o vídeo", not w.video_out and not w.vwin.isVisible())
+
+QTest.mouseDClick(w.video_widget, Qt.LeftButton)
+pump(0.2)
+check("duplo clique no vídeo: tela cheia", w.vwin.mode == "fullscreen")
+QTest.mouseDClick(w.vwin.video, Qt.LeftButton)
+pump(0.2)
+check("duplo clique de novo: sai da tela cheia", not w.vwin.isVisible() and not w.video_out)
+sync_ok("após todas as trocas")
+w.pause()
+w.popout_video()
+pump(0.2)
+w.close_video_window()
+pump(0.1)
+check("pausado: trocar não começa a tocar sozinho", not w.playing)
 
 print("\n[exportar]")
 w.auto_align()

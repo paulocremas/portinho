@@ -40,7 +40,23 @@ def draw(size):
     return img
 
 
+def wizard(w, h, icon_size):
+    """Imagens do instalador do Windows (Inno Setup usa BMP)."""
+    img = QImage(w, h, QImage.Format_RGB32)
+    p = QPainter(img)
+    g = QLinearGradient(0, 0, 0, h)
+    g.setColorAt(0, QColor("#1a1530"))
+    g.setColorAt(1, QColor("#0d0f14"))
+    p.fillRect(0, 0, w, h, g)
+    ic = draw(icon_size)
+    p.drawImage((w - icon_size) // 2, (h - icon_size) // 2 if h < 100 else h // 5, ic)
+    p.end()
+    return img
+
+
 os.makedirs(OUT, exist_ok=True)
 draw(512).save(os.path.join(OUT, "icon.png"))
 draw(256).save(os.path.join(OUT, "icon.ico"))
+wizard(164, 314, 120).save(os.path.join(OUT, "wizard.bmp"))
+wizard(55, 55, 48).save(os.path.join(OUT, "wizard_small.bmp"))
 print("ok")

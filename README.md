@@ -18,6 +18,14 @@ Troque a música de um vídeo do YouTube por um arquivo do seu PC, alinhando pel
 | zoom / rolar | roda do mouse / Shift + roda ou botão direito |
 | tocar / pausar | Espaço |
 | desfazer / refazer | Ctrl+Z / Ctrl+Shift+Z |
+| tela cheia | botão ⛶, tecla F ou duplo clique no vídeo (Esc sai) |
+| janela flutuante | botão ao lado da tela cheia; fechar a janela devolve o vídeo |
+
+Tela cheia e janela flutuante não pausam nem dessincronizam a reprodução.
+
+**Atualizações:** ao abrir, o Portinho checa se há internet e uma versão nova em
+[Releases](https://github.com/paulocremas/portinho/releases). Se houver, pergunta se você quer
+atualizar e mostra o download e a instalação. Sem internet ou sem novidade, abre normalmente.
 
 ## Instalar
 
@@ -26,11 +34,14 @@ Troque a música de um vídeo do YouTube por um arquivo do seu PC, alinhando pel
     sudo apt install ./dist/portinho_1.0.0_amd64.deb
 
 Aparece no menu como *Portinho*; no terminal, `portinho`. Para remover: `sudo apt remove portinho`.
-Sem instalar: extraia `portinho_1.0.0_linux_x86_64.tar.gz` e rode `portinho/portinho`.
+Sem senha: extraia `portinho_1.0.0_linux_x86_64.tar.gz` e rode `portinho/instalar.sh`
+(instala no seu usuário, com tela de progresso; para remover, `portinho --uninstall`).
+Ou rode direto `portinho/portinho`, sem instalar.
 
 **Windows:** `Portinho-Setup-1.0.0.exe` (instalador, não pede administrador) ou `Portinho.exe` (portátil).
 
-Problemas? `portinho --selftest` confere ffmpeg, download do YouTube, som e vídeo.
+Problemas? `portinho --selftest` confere ffmpeg, download do YouTube, som e vídeo;
+`portinho --check-update` mostra a versão, o tipo de instalação e se há atualização.
 
 ## Compilar
 
@@ -44,4 +55,6 @@ Problemas? `portinho --selftest` confere ffmpeg, download do YouTube, som e víd
 
     pip install -r requirements.txt
     python run.py [vídeo] [música]
-    QT_QPA_PLATFORM=offscreen python tests/test_gui.py video.mp4   # 32 testes da interface
+    QT_QPA_PLATFORM=offscreen python tests/test_gui.py video.mp4          # interface
+    QT_QPA_PLATFORM=offscreen python tests/test_update.py                 # atualizador
+    QT_QPA_PLATFORM=offscreen python tests/test_e2e_linux.py dist/*.tar.gz  # pacote real
