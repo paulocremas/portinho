@@ -10,6 +10,7 @@ from .audio import SR
 class MusicPlayer:
     def __init__(self):
         self.data = None          # float32 (n, 2)
+        self.sr = SR              # toca na taxa original do arquivo (sem reamostrar)
         self.pos = 0              # posição em amostras (pode ser negativa = silêncio antes)
         self.volume = 1.0
         self.playing = False
@@ -18,14 +19,17 @@ class MusicPlayer:
         self._cb_start = None     # amostra do início do último bloco entregue
         self._cb_dac = 0.0        # horário (relógio do stream) em que esse bloco toca
 
-    def set_data(self, data):
+    def set_data(self, data, sr=SR):
+        if sr != self.sr and self._stream is not None:
+            self.close()              # reabre o dispositivo na taxa nova
         with self._lock:
             self.data = data
+            self.sr = sr
             self.pos = 0
 
     @property
     def duration(self):
-        return 0.0 if self.data is None else len(self.data) / SR
+        return 0.0 if self.data is None else len(self.data) / self.sr
 
     def _latency(self):
         return self._stream.latency if self._stream is not None else 0.0
@@ -38,13 +42,13 @@ class MusicPlayer:
         """
         st = self._stream
         if st is None or self._cb_start is None or not self.playing:
-            return self.pos / SR - self._latency()
-        return self._cb_start / SR + (st.time - self._cb_dac)
+            return self.pos / self.sr - self._latency()
+        return self._cb_start / self.sr + (st.time - self._cb_dac)
 
     def seek(self, seconds):
         with self._lock:
             lat = self._latency()
-            self.pos = int(round((seconds + lat) * SR))
+            self.pos = int(round((seconds + lat) * self.sr))
             if self._stream is not None:
                 # estimativa até o próximo bloco chegar
                 self._cb_start = self.pos
@@ -52,7 +56,7 @@ class MusicPlayer:
 
     def play(self, seconds):
         if self._stream is None:
-            self._stream = sd.OutputStream(samplerate=SR, channels=2, dtype="float32",
+            self._stream = sd.OutputStream(samplerate=self.sr, channels=2, dtype="float32",
                                            callback=self._callback)
             self._stream.start()
         self.seek(seconds)

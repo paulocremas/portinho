@@ -34,7 +34,15 @@ Depois de instalado, o Portinho avisa sozinho quando sair uma versão nova.
 2. **Música** — arraste o arquivo (WAV, MP3, FLAC, OGG, M4A…) para a janela ou clique na área tracejada.
 3. **Alinhar** — o Portinho já sugere o encaixe sozinho. Para ajustar, **arraste** o espectrograma
    (vídeo em azul, música em laranja) até os desenhos coincidirem. Dá para arrastar tocando.
-4. **Exportar vídeo…** salva um MP4 com a música no lugar.
+4. **Exportar vídeo…** salva o vídeo com a música no lugar:
+   **MKV** (qualidade máxima: vídeo original sem recompressão + música em FLAC sem perdas, na taxa original)
+   ou **MP4** (AAC 320 kbps, abre em qualquer lugar).
+
+**Baixar áudio .wav** salva o áudio do link do YouTube (ou do vídeo aberto) em WAV: melhor faixa
+disponível, taxa de amostragem original, 32 bits float — exatamente o que o decodificador entrega.
+
+**Qualidade máxima sempre:** o vídeo vem na maior resolução e fps disponíveis (até 4K/8K, VP9 ou H.264)
+com o melhor áudio, e a música toca na taxa original do arquivo, sem reamostrar.
 
 | Ação | Como |
 |---|---|

@@ -58,7 +58,7 @@ def pump(sec):
 # música de teste: áudio do vídeo com 2,5 s de silêncio antes
 music = os.path.join(OUT, "musica_teste.wav")
 subprocess.run([audio.ffmpeg_exe(), "-y", "-v", "error", "-i", VIDEO, "-vn",
-                "-af", f"adelay={int(SHIFT*1000)}|{int(SHIFT*1000)}", "-ar", "44100", music], check=True)
+                "-af", f"adelay={int(SHIFT*1000)}|{int(SHIFT*1000)}", "-ar", "48000", music], check=True)
 
 os.environ['PORTINHO_NO_UPDATE'] = '1'
 w = MainWindow()
@@ -322,12 +322,84 @@ w.close_video_window()
 pump(0.1)
 check("pausado: trocar não começa a tocar sozinho", not w.playing)
 
+print("\n[qualidade máxima]")
+check("música toca na taxa original (48 kHz, sem reamostrar)", w.mplayer.sr == 48000, w.mplayer.sr)
+
+
+def info(path):
+    r = subprocess.run([audio.ffmpeg_exe(), "-hide_banner", "-i", path], capture_output=True, text=True)
+    return r.stderr
+
+
+saved = {}
+QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (saved["path"], saved.get("filter", "")))
+
+# WAV do vídeo aberto (sem link)
+w.url_edit.clear()
+saved["path"] = os.path.join(OUT, "do_video.wav")
+msgs.clear()
+w.save_wav()
+check("WAV do vídeo aberto salvo", wait(lambda: any(m[0] == "INFO" for m in msgs), 60) and os.path.exists(saved["path"]))
+inf = info(saved["path"])
+src_rate = audio.probe_rate(VIDEO)
+check("WAV: 32 bits float, taxa original do vídeo", "pcm_f32le" in inf and audio.probe_rate(saved["path"]) == src_rate,
+      f"{audio.probe_rate(saved['path'])} Hz (original {src_rate})")
+a1, a2 = audio.decode(VIDEO, 2, src_rate), audio.decode(saved["path"], 2, src_rate)
+check("WAV idêntico ao áudio decodificado (sem perdas)", a1.shape == a2.shape and float(np.abs(a1 - a2).max()) == 0.0)
+
+# WAV direto de um link do YouTube: melhor faixa (Opus 48 kHz)
+w.url_edit.setText("https://www.youtube.com/watch?v=jNQXAC9IVRw")
+saved["path"] = os.path.join(OUT, "do_youtube.wav")
+msgs.clear()
+w.save_wav()
+ok = wait(lambda: msgs, 120)
+check("WAV do YouTube salvo", ok and msgs[0][0] == "INFO" and os.path.exists(saved["path"]), msgs[:1])
+if os.path.exists(saved["path"]):
+    check("WAV do YouTube: melhor faixa (48 kHz) em 32 bits float",
+          audio.probe_rate(saved["path"]) == 48000 and "pcm_f32le" in info(saved["path"]),
+          f"{audio.probe_rate(saved['path'])} Hz")
+w.url_edit.clear()
+
+# exportar MKV sem perdas
+w.auto_align()
+saved["path"] = os.path.join(OUT, "exportado.mkv")
+saved["filter"] = "MKV"
+msgs.clear()
+w.export()
+check("exportou MKV", wait(lambda: msgs, 60) and msgs[0][0] == "INFO" and os.path.exists(saved["path"]), msgs[:1])
+inf = info(saved["path"])
+vcodec = lambda txt: [l for l in txt.splitlines() if "Video:" in l][0].split("Video:")[1].split()[0]
+check("MKV: vídeo copiado sem recomprimir", vcodec(inf) == vcodec(info(VIDEO)), vcodec(inf))
+m_src = audio.decode(music, 1, 48000)[:, 0]
+m_out = audio.decode(saved["path"], 1, 48000)[:, 0]
+k = int(round(w.music_delta() * 48000))     # a música começa k amostras "dentro" do arquivo
+seg = m_out[48000:48000 + 9600]
+errs = {j: float(np.abs(m_src[48000 + k + j:48000 + k + j + 9600] - seg).max()) for j in (-1, 0, 1)}
+j = min(errs, key=errs.get)
+check("MKV: amostras da música idênticas às do original", errs[j] < 1e-6, f"erro {errs[j]:.1e}")
+check("MKV: alinhamento exato (±1 amostra)", errs[0] < 1e-6 or errs[j] < 1e-6 and abs(j) <= 1, f"desvio {j} amostra(s)")
+# música começando DEPOIS do vídeo (caminho do atraso exato em amostras)
+w.offset_spin.setValue(1.25)
+saved["path"] = os.path.join(OUT, "exportado_atraso.mkv")
+msgs.clear()
+w.export()
+check("exportou MKV com a música atrasada", wait(lambda: msgs, 60) and msgs[0][0] == "INFO")
+m_out = audio.decode(saved["path"], 1, 48000)[:, 0]
+lead = int(round(1.25 * 48000))
+check("silêncio exato antes da música", float(np.abs(m_out[:lead - 2]).max()) == 0.0)
+errs = {j: float(np.abs(m_out[lead + j:lead + j + 48000 * 3] - m_src[:48000 * 3]).max()) for j in (-1, 0, 1)}
+j = min(errs, key=errs.get)
+check("música atrasada: amostras idênticas e no lugar exato", errs[j] < 1e-6 and abs(j) <= 1,
+      f"desvio {j} amostra(s), erro {errs[j]:.1e}")
+w.undo()
+
 print("\n[exportar]")
 w.auto_align()
 out = os.path.join(OUT, "exportado.mp4")
 QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (out, "MP4 (*.mp4)"))
 if os.path.exists(out):
     os.remove(out)
+msgs.clear()
 w.export()
 check("exportou", wait(lambda: any(m[0] == "INFO" for m in msgs), 60) and os.path.exists(out))
 # confere o alinhamento no arquivo exportado: o áudio exportado deve bater com o do vídeo

@@ -1,5 +1,6 @@
 """Decodificação de áudio (via ffmpeg), espectrograma e auto-alinhamento."""
 import os
+import re
 import subprocess
 import sys
 
@@ -30,10 +31,18 @@ def _popen_kwargs():
     return {}
 
 
-def decode(path, channels=2):
-    """Decodifica qualquer arquivo de áudio/vídeo para float32 (n, channels) a 44.1 kHz."""
+def probe_rate(path):
+    """Taxa de amostragem original da primeira faixa de áudio (None se não achar)."""
+    proc = subprocess.run([ffmpeg_exe(), "-hide_banner", "-i", path], stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE, **_popen_kwargs())
+    m = re.search(r"Audio:.*?(\d+) Hz", proc.stderr.decode(errors="replace"))
+    return int(m.group(1)) if m else None
+
+
+def decode(path, channels=2, sr=SR):
+    """Decodifica qualquer arquivo de áudio/vídeo para float32 (n, channels) na taxa `sr`."""
     cmd = [ffmpeg_exe(), "-v", "error", "-i", path, "-vn",
-           "-f", "f32le", "-acodec", "pcm_f32le", "-ac", str(channels), "-ar", str(SR), "-"]
+           "-f", "f32le", "-acodec", "pcm_f32le", "-ac", str(channels), "-ar", str(sr), "-"]
     proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **_popen_kwargs())
     if proc.returncode != 0:
         raise RuntimeError(proc.stderr.decode(errors="replace").strip() or "ffmpeg falhou")

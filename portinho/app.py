@@ -24,6 +24,10 @@ from .videowindow import VideoWindow
 
 APP_NAME = "Portinho"
 SYNC_TOLERANCE = 0.040   # s de diferença antes de ressincronizar a música
+# Qualidade máxima: maior resolução/fps e o melhor áudio disponíveis. AV1 fica de fora porque o
+# reprodutor embutido não decodifica (tela preta); o YouTube oferece VP9 nas mesmas resoluções.
+VIDEO_FORMAT = "bv*[vcodec!^=av01]+ba/b[vcodec!^=av01]/bv*+ba/b"
+AUDIO_FORMAT = "ba/b"
 AUDIO_EXT = {".wav", ".mp3", ".flac", ".ogg", ".oga", ".m4a", ".aac", ".aif", ".aiff", ".wma", ".opus", ".alac"}
 VIDEO_EXT = {".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v", ".wmv", ".flv", ".ts"}
 
@@ -49,6 +53,7 @@ class Bridge(QObject):
     trackReady = Signal(str, object)      # "video"/"music", dict
     error = Signal(str)
     exported = Signal(str)
+    wavReady = Signal(str, str)           # arquivo de áudio baixado, título
 
 
 def run_bg(fn, *args):
@@ -90,6 +95,7 @@ class MainWindow(QMainWindow):
         self.bridge.trackReady.connect(self._on_track_ready)
         self.bridge.error.connect(self._on_error)
         self.bridge.exported.connect(self._on_exported)
+        self.bridge.wavReady.connect(self._on_wav_ready)
 
         self.video_path = None
         self.music_path = None
@@ -186,8 +192,14 @@ class MainWindow(QMainWindow):
         self.btn_dl.setObjectName("primary")
         self.btn_dl.setCursor(Qt.PointingHandCursor)
         self.btn_dl.clicked.connect(self.download)
+        self.btn_wav = QPushButton("Baixar áudio .wav")
+        self.btn_wav.setCursor(Qt.PointingHandCursor)
+        self.btn_wav.setToolTip("Salva o áudio do vídeo em WAV, na qualidade máxima\n"
+                                "(melhor faixa do YouTube, taxa original, 32 bits sem perdas)")
+        self.btn_wav.clicked.connect(self.save_wav)
         r.addWidget(self.url_edit, 1)
         r.addWidget(self.btn_dl)
+        r.addWidget(self.btn_wav)
         vc.addLayout(r)
         self.video_info = QLabel("Sem anúncios · o vídeo toca sem o som original")
         self.video_info.setObjectName("muted")
@@ -415,6 +427,7 @@ class MainWindow(QMainWindow):
         self.btn_auto.setEnabled(both and "align" not in self.busy)
         self.btn_export.setEnabled(has_v and has_m and "export" not in self.busy)
         self.btn_dl.setEnabled("download" not in self.busy)
+        self.btn_wav.setEnabled("wav" not in self.busy)
         self.btn_undo.setEnabled(bool(self.undo_stack))
         for badge, done in ((self.video_step, self.timeline.video.loaded),
                             (self.music_step, self.timeline.music.loaded),
@@ -583,19 +596,8 @@ class MainWindow(QMainWindow):
                     self.bridge.status.emit("Finalizando o download…")
                     self.bridge.progress.emit(-1)
 
-            opts = {
-                "format": "bv*[height<=1080][vcodec^=avc1]+ba[ext=m4a]/bv*[height<=1080]+ba/b",
-                "merge_output_format": "mp4",
-                "outtmpl": os.path.join(data_dir(), "%(id)s.%(ext)s"),
-                "ffmpeg_location": audio.ffmpeg_exe(),
-                "noplaylist": True,
-                "quiet": True,
-                "no_warnings": True,
-                "progress_hooks": [hook],
-            }
-            deno = os.path.join(audio.resource_dir(), "deno.exe" if os.name == "nt" else "deno")
-            if os.path.exists(deno):
-                opts["js_runtimes"] = {"deno": {"path": deno}}
+            opts = self._ydl_opts(VIDEO_FORMAT, "%(id)s.%(ext)s", hook)
+            opts["merge_output_format"] = "mkv"     # aceita qualquer codec sem converter
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=True)
                 if "entries" in info:
@@ -607,6 +609,99 @@ class MainWindow(QMainWindow):
         except Exception as e:
             msg = str(e).replace("\x1b[0;31m", "").replace("\x1b[0m", "")
             self.bridge.error.emit(f"Não foi possível baixar o vídeo.\n\n{msg}")
+
+    # ================================================================ áudio .wav
+    def save_wav(self):
+        """Baixa o melhor áudio do link (ou usa o vídeo aberto) e salva em WAV sem perdas."""
+        if "wav" in self.busy:
+            return
+        url = self.url_edit.text().strip()
+        if not url and not self.video_path:
+            QMessageBox.information(self, APP_NAME, "Cole um link do YouTube (ou abra um vídeo) primeiro.")
+            return
+        if url and not url.startswith("http"):
+            url = "https://" + url
+        self.busy.add("wav")
+        self._refresh_enabled()
+        self.bridge.status.emit("Baixando o áudio em qualidade máxima…")
+        self.bridge.progress.emit(0)
+        run_bg(self._wav_worker, url or None)
+
+    def _wav_worker(self, url):
+        try:
+            if url:
+                import yt_dlp
+
+                def hook(d):
+                    if d.get("status") == "downloading":
+                        total = d.get("total_bytes") or d.get("total_bytes_estimate")
+                        if total:
+                            pct = d.get("downloaded_bytes", 0) * 100 / total
+                            self.bridge.progress.emit(min(pct, 99))
+                            self.bridge.status.emit(f"Baixando o áudio… {pct:.0f}%")
+                opts = self._ydl_opts(AUDIO_FORMAT, "%(id)s.audio.%(ext)s", hook)
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(url, download=True)
+                    if "entries" in info:
+                        info = next(e for e in info["entries"] if e)
+                    reqs = info.get("requested_downloads") or []
+                    src = reqs[0]["filepath"] if reqs else ydl.prepare_filename(info)
+                title = info.get("title") or "audio"
+            else:
+                src = self.video_path
+                title = os.path.splitext(os.path.basename(src))[0]
+            self.bridge.progress.emit(-1)
+            self.bridge.wavReady.emit(src, title)
+        except Exception as e:
+            msg = str(e).replace("\x1b[0;31m", "").replace("\x1b[0m", "")
+            self.busy.discard("wav")
+            self.bridge.error.emit(f"Não foi possível baixar o áudio.\n\n{msg}")
+
+    def _on_wav_ready(self, src, title):
+        safe = "".join(c for c in title if c not in '\\/:*?"<>|').strip() or "audio"
+        out, _ = QFileDialog.getSaveFileName(self, "Salvar áudio em WAV",
+                                             os.path.join(os.path.expanduser("~"), f"{safe}.wav"),
+                                             "WAV (*.wav)")
+        if not out:
+            self.busy.discard("wav")
+            self.bridge.progress.emit(100)
+            self.bridge.status.emit("")
+            self._refresh_enabled()
+            return
+        if not out.lower().endswith(".wav"):
+            out += ".wav"
+        self.bridge.status.emit("Gravando o WAV…")
+        run_bg(self._wav_convert, src, out)
+
+    def _wav_convert(self, src, out):
+        try:
+            # sem reamostrar e sem mexer nos canais; float 32 bits guarda exatamente o que o
+            # decodificador entrega; rf64 permite arquivos acima de 4 GB
+            cmd = [audio.ffmpeg_exe(), "-y", "-v", "error", "-i", src, "-vn", "-map", "0:a:0",
+                   "-c:a", "pcm_f32le", "-rf64", "auto", out]
+            proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **audio._popen_kwargs())
+            if proc.returncode != 0:
+                raise RuntimeError(proc.stderr.decode(errors="replace"))
+            self.busy.discard("wav")
+            self.bridge.exported.emit(out)
+        except Exception as e:
+            self.busy.discard("wav")
+            self.bridge.error.emit(f"Falha ao gravar o WAV:\n{e}")
+
+    def _ydl_opts(self, fmt, outtmpl, hook):
+        opts = {
+            "format": fmt,
+            "outtmpl": os.path.join(data_dir(), outtmpl),
+            "ffmpeg_location": audio.ffmpeg_exe(),
+            "noplaylist": True,
+            "quiet": True,
+            "no_warnings": True,
+            "progress_hooks": [hook],
+        }
+        deno = os.path.join(audio.resource_dir(), "deno.exe" if os.name == "nt" else "deno")
+        if os.path.exists(deno):
+            opts["js_runtimes"] = {"deno": {"path": deno}}
+        return opts
 
     def open_local_video(self):
         exts = " ".join(f"*{e}" for e in sorted(VIDEO_EXT))
@@ -666,7 +761,10 @@ class MainWindow(QMainWindow):
             rgb, flux = audio.spectrogram(data.mean(axis=1))
             result = {"rgb": rgb, "flux": flux, "duration": len(data) / audio.SR, "path": path}
             if kind == "music":
-                result["data"] = data
+                # para ouvir: taxa original do arquivo, sem reamostrar
+                native = audio.probe_rate(path) or audio.SR
+                result["data"] = data if native == audio.SR else audio.decode(path, 2, native)
+                result["sr"] = native
             self.bridge.trackReady.emit(kind, result)
         except Exception as e:
             if kind == "video":
@@ -693,7 +791,7 @@ class MainWindow(QMainWindow):
             if r["path"] != self.music_path:
                 return
             tl.music.set_spectrogram(r["rgb"], audio.FPS, r["duration"])
-            self.mplayer.set_data(r["data"])
+            self.mplayer.set_data(r["data"], r["sr"])
             self.music_flux = r["flux"]
             self.dropzone.setText(f"♪   {os.path.basename(r['path'])}\n"
                                   f"{fmt_time(r['duration'], ms=False)}  ·  clique para trocar")
@@ -917,13 +1015,16 @@ class MainWindow(QMainWindow):
         if not self.video_path or self.music_path is None:
             return
         base = os.path.splitext(os.path.basename(self.video_path))[0]
-        out, _ = QFileDialog.getSaveFileName(self, "Salvar vídeo",
-                                             os.path.join(os.path.expanduser("~"), f"{base}_nova_musica.mp4"),
-                                             "MP4 (*.mp4)")
+        mkv = "MKV — qualidade máxima, áudio sem perdas FLAC (*.mkv)"
+        mp4 = "MP4 — áudio AAC 320 kbps, abre em qualquer lugar (*.mp4)"
+        out, chosen = QFileDialog.getSaveFileName(self, "Salvar vídeo",
+                                                  os.path.join(os.path.expanduser("~"), f"{base}_nova_musica.mkv"),
+                                                  f"{mkv};;{mp4}", mkv)
         if not out:
             return
-        if not out.lower().endswith(".mp4"):
-            out += ".mp4"
+        ext = os.path.splitext(out)[1].lower()
+        if ext not in (".mkv", ".mp4"):
+            out += ".mp4" if chosen == mp4 else ".mkv"
         self.busy.add("export")
         self._refresh_enabled()
         self.bridge.status.emit("Exportando…")
@@ -935,20 +1036,26 @@ class MainWindow(QMainWindow):
         try:
             cmd = [audio.ffmpeg_exe(), "-y", "-v", "error", "-i", self.video_path]
             if d > 0:
-                cmd += ["-ss", f"{d:.4f}"]
+                cmd += ["-ss", f"{d:.6f}"]
             cmd += ["-i", self.music_path]
-            chain = f"[1:a]aresample={audio.SR}"
+            # sem reamostrar: a música sai na taxa original; volume 100% = não toca nas amostras
+            filters = []
             if d < 0:
-                ms = int(round(-d * 1000))
-                chain += f",adelay={ms}|{ms}"
-            chain += f",volume={mvol:.3f}[m]"
+                rate = audio.probe_rate(self.music_path) or audio.SR
+                filters.append(f"adelay=delays={int(round(-d * rate))}S:all=1")   # atraso exato, em amostras
+            if abs(mvol - 1.0) > 1e-6:
+                filters.append(f"volume={mvol:.3f}")
+            chain = "[1:a]" + (",".join(filters) or "anull") + "[m]"
             if vvol > 0 and self.video_flux is not None:
                 fc = f"{chain};[0:a]volume={vvol:.3f}[o];[m][o]amix=inputs=2:normalize=0:duration=longest[a]"
             else:
                 fc = chain.replace("[m]", "[a]")
+            if out.lower().endswith(".mkv"):
+                acodec = ["-c:a", "flac", "-compression_level", "8"]
+            else:
+                acodec = ["-c:a", "aac", "-b:a", "320k", "-movflags", "+faststart"]
             cmd += ["-filter_complex", fc, "-map", "0:v:0", "-map", "[a]",
-                    "-c:v", "copy", "-c:a", "aac", "-b:a", "320k",
-                    "-t", f"{duration:.3f}", "-movflags", "+faststart", out]
+                    "-c:v", "copy", *acodec, "-t", f"{duration:.3f}", out]
             proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                   **audio._popen_kwargs())
             if proc.returncode != 0:
@@ -961,8 +1068,10 @@ class MainWindow(QMainWindow):
         self.busy.discard("export")
         self.bridge.progress.emit(100)
         self.bridge.status.emit(f"Salvo: {os.path.basename(out)}")
+        self.busy.discard("wav")
         self._refresh_enabled()
-        QMessageBox.information(self, APP_NAME, f"Vídeo salvo em:\n{out}")
+        what = "Áudio" if out.lower().endswith(".wav") else "Vídeo"
+        QMessageBox.information(self, APP_NAME, f"{what} salvo em:\n{out}")
 
     # ================================================================ teclado
     def keyPressEvent(self, e):
