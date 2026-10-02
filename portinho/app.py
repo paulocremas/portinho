@@ -17,7 +17,8 @@ from PySide6.QtWidgets import (
     QStackedWidget, QVBoxLayout, QWidget,
 )
 
-from . import __version__, audio, icons, theme
+from . import __version__, audio, download, icons, theme
+from .log import LOG_PATH, install_excepthook, log, tail
 from .player import MusicPlayer
 from .timeline import Timeline, fmt_delta, fmt_time
 from .videowindow import VideoWindow
@@ -112,7 +113,7 @@ class MainWindow(QMainWindow):
         self.vplayer.setVideoOutput(self.video_widget)
         self.vplayer.playbackStateChanged.connect(self._on_playback_state)
         self.vplayer.durationChanged.connect(self._on_video_duration)
-        self.vplayer.errorOccurred.connect(lambda _e, msg: msg and self._on_error(f"Vídeo: {msg}"))
+        self.vplayer.errorOccurred.connect(lambda _e, msg: msg and self._on_error(f"Não consegui tocar o vídeo.\n\n{msg}"))
         self.mplayer = MusicPlayer()
         self.vwin = None             # janela separada do vídeo (flutuante / tela cheia)
         self.video_out = False
@@ -516,7 +517,11 @@ class MainWindow(QMainWindow):
         if self.video_info.text() == "Baixando…":
             self.video_info.setText("Não deu certo — confira o link e tente de novo")
         self._refresh_enabled()
-        QMessageBox.warning(self, APP_NAME, msg)
+        log.error("aviso ao usuário: %s", msg.replace("\n", " | "))
+        box = QMessageBox(QMessageBox.Warning, APP_NAME, msg, QMessageBox.Ok, self)
+        box.setInformativeText(f"Registro completo em:\n{LOG_PATH}")
+        box.setDetailedText(tail(60))
+        box.exec()
 
     # ================================================================ arrastar arquivos
     def _classify_drop(self, mime):
@@ -583,8 +588,6 @@ class MainWindow(QMainWindow):
 
     def _download_worker(self, url):
         try:
-            import yt_dlp
-
             def hook(d):
                 if d.get("status") == "downloading":
                     total = d.get("total_bytes") or d.get("total_bytes_estimate")
@@ -596,19 +599,14 @@ class MainWindow(QMainWindow):
                     self.bridge.status.emit("Finalizando o download…")
                     self.bridge.progress.emit(-1)
 
-            opts = self._ydl_opts(VIDEO_FORMAT, "%(id)s.%(ext)s", hook)
-            opts["merge_output_format"] = "mkv"     # aceita qualquer codec sem converter
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                if "entries" in info:
-                    info = next(e for e in info["entries"] if e)
-                reqs = info.get("requested_downloads") or []
-                path = reqs[0]["filepath"] if reqs else ydl.prepare_filename(info)
+            # mkv aceita qualquer codec sem converter
+            info, path = download.fetch(url, VIDEO_FORMAT, "%(id)s.%(ext)s", hook, data_dir(), merge="mkv",
+                                        attempt_cb=lambda n: self.bridge.status.emit(f"Tentando de outro jeito ({n})…"))
             self.busy.discard("download")
             self.bridge.videoReady.emit(path, info.get("title") or os.path.basename(path))
         except Exception as e:
-            msg = str(e).replace("\x1b[0;31m", "").replace("\x1b[0m", "")
-            self.bridge.error.emit(f"Não foi possível baixar o vídeo.\n\n{msg}")
+            log.exception("download do vídeo falhou")
+            self.bridge.error.emit(f"Não foi possível baixar o vídeo.\n\n{e}")
 
     # ================================================================ áudio .wav
     def save_wav(self):
@@ -630,8 +628,6 @@ class MainWindow(QMainWindow):
     def _wav_worker(self, url):
         try:
             if url:
-                import yt_dlp
-
                 def hook(d):
                     if d.get("status") == "downloading":
                         total = d.get("total_bytes") or d.get("total_bytes_estimate")
@@ -639,13 +635,8 @@ class MainWindow(QMainWindow):
                             pct = d.get("downloaded_bytes", 0) * 100 / total
                             self.bridge.progress.emit(min(pct, 99))
                             self.bridge.status.emit(f"Baixando o áudio… {pct:.0f}%")
-                opts = self._ydl_opts(AUDIO_FORMAT, "%(id)s.audio.%(ext)s", hook)
-                with yt_dlp.YoutubeDL(opts) as ydl:
-                    info = ydl.extract_info(url, download=True)
-                    if "entries" in info:
-                        info = next(e for e in info["entries"] if e)
-                    reqs = info.get("requested_downloads") or []
-                    src = reqs[0]["filepath"] if reqs else ydl.prepare_filename(info)
+                info, src = download.fetch(url, AUDIO_FORMAT, "%(id)s.audio.%(ext)s", hook, data_dir(),
+                                           attempt_cb=lambda n: self.bridge.status.emit(f"Tentando de outro jeito ({n})…"))
                 title = info.get("title") or "audio"
             else:
                 src = self.video_path
@@ -653,9 +644,9 @@ class MainWindow(QMainWindow):
             self.bridge.progress.emit(-1)
             self.bridge.wavReady.emit(src, title)
         except Exception as e:
-            msg = str(e).replace("\x1b[0;31m", "").replace("\x1b[0m", "")
+            log.exception("download do áudio falhou")
             self.busy.discard("wav")
-            self.bridge.error.emit(f"Não foi possível baixar o áudio.\n\n{msg}")
+            self.bridge.error.emit(f"Não foi possível baixar o áudio.\n\n{e}")
 
     def _on_wav_ready(self, src, title):
         safe = "".join(c for c in title if c not in '\\/:*?"<>|').strip() or "audio"
@@ -687,21 +678,6 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.busy.discard("wav")
             self.bridge.error.emit(f"Falha ao gravar o WAV:\n{e}")
-
-    def _ydl_opts(self, fmt, outtmpl, hook):
-        opts = {
-            "format": fmt,
-            "outtmpl": os.path.join(data_dir(), outtmpl),
-            "ffmpeg_location": audio.ffmpeg_exe(),
-            "noplaylist": True,
-            "quiet": True,
-            "no_warnings": True,
-            "progress_hooks": [hook],
-        }
-        deno = os.path.join(audio.resource_dir(), "deno.exe" if os.name == "nt" else "deno")
-        if os.path.exists(deno):
-            opts["js_runtimes"] = {"deno": {"path": deno}}
-        return opts
 
     def open_local_video(self):
         exts = " ".join(f"*{e}" for e in sorted(VIDEO_EXT))
@@ -1130,6 +1106,10 @@ def _open_main(argv):
 
 
 def main():
+    install_excepthook()
+    import platform
+    log.info("Portinho %s iniciando · %s · Python %s · %s", __version__, platform.platform(),
+             platform.python_version(), "empacotado" if getattr(sys, "frozen", False) else "código-fonte")
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setApplicationVersion(__version__)

@@ -50,16 +50,9 @@ def run(argv):
     state = {}
 
     def download():
-        import yt_dlp
-        opts = {"format": "bv*[height<=360]+ba/b[height<=360]/b", "merge_output_format": "mp4",
-                "outtmpl": os.path.join(tmp, "%(id)s.%(ext)s"), "ffmpeg_location": audio.ffmpeg_exe(),
-                "quiet": True, "no_warnings": True, "noplaylist": True}
-        d = os.path.join(audio.resource_dir(), "deno.exe" if os.name == "nt" else "deno")
-        if os.path.exists(d):
-            opts["js_runtimes"] = {"deno": {"path": d}}
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            state["video"] = info["requested_downloads"][0]["filepath"]
+        from . import download as dl
+        info, state["video"] = dl.fetch(url, "bv*[height<=360]+ba/b[height<=360]/b", "%(id)s.%(ext)s",
+                                        lambda d: None, tmp, merge="mkv")
         return f"{info.get('title')!r} ({os.path.getsize(state['video']) // 1024} KB)"
 
     step("baixar do YouTube", download)
@@ -108,6 +101,8 @@ def run(argv):
         step("reprodutor de vídeo (Qt)", qt_video)
 
     shutil.rmtree(tmp, ignore_errors=True)
+    from .log import LOG_PATH
+    print(f"\nRegistro: {LOG_PATH}")
     ok = all(results)
     print("\nTudo certo!" if ok else f"\n{results.count(False)} problema(s).")
     return 0 if ok else 1

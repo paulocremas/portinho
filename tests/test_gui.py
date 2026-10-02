@@ -27,6 +27,7 @@ app = QApplication(sys.argv)
 theme.apply(app)
 msgs = []
 QMessageBox.warning = staticmethod(lambda *a: msgs.append(("WARN", a[2])))
+QMessageBox.exec = lambda self: msgs.append(("WARN", self.text())) or 0
 QMessageBox.information = staticmethod(lambda *a: msgs.append(("INFO", a[2])))
 
 fails = []
