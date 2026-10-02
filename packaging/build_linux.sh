@@ -20,10 +20,12 @@ fi
 
 VERSION=$("$PY" -c "import portinho; print(portinho.__version__)")
 QT_QPA_PLATFORM=offscreen "$PY" packaging/make_icon.py >/dev/null
+mkdir -p build && printf "%s" "$VERSION" > build/portinho_build.txt
 
 "$PY" -m PyInstaller --noconfirm --clean --onedir --windowed --name portinho \
     --icon assets/icon.png \
     --add-data "assets:assets" \
+    --add-data "build/portinho_build.txt:." \
     --add-binary "build/deno/deno:." \
     --collect-all imageio_ffmpeg \
     --collect-all yt_dlp_ejs \

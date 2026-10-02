@@ -51,7 +51,7 @@ def run(argv):
 
     def download():
         from . import download as dl
-        info, state["video"] = dl.fetch(url, "bv*[height<=360]+ba/b[height<=360]/b", "%(id)s.%(ext)s",
+        info, state["video"] = dl.fetch(url, "bv*[height<=360][vcodec!^=av01]+ba/b[height<=360]/b", "%(id)s.%(ext)s",
                                         lambda d: None, tmp, merge="mkv")
         return f"{info.get('title')!r} ({os.path.getsize(state['video']) // 1024} KB)"
 

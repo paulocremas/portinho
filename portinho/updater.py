@@ -186,7 +186,7 @@ def perform(info, step, progress, cancelled=lambda: False):
         step(2, "Abrindo o instalador")
         progress(-1, "O instalador mostra o andamento e reabre o Portinho no final")
         subprocess.Popen([setup, "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS"],
-                         creationflags=getattr(subprocess, "DETACHED_PROCESS", 0))
+                         creationflags=getattr(subprocess, "DETACHED_PROCESS", 0), env=clean_env())
         return None
 
     if info.kind == "win-portable":
@@ -251,10 +251,22 @@ def perform(info, step, progress, cancelled=lambda: False):
     raise RuntimeError(f"tipo de instalação desconhecido: {info.kind}")
 
 
+def clean_env():
+    """Ambiente para abrir outro programa empacotado sem herdar o nosso (pasta temporária,
+    LD_LIBRARY_PATH...). Sem isso, o Portinho reaberto usaria a pasta do processo antigo."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("_PYI_", "_MEIPASS"))}
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    if "LD_LIBRARY_PATH_ORIG" in env:
+        env["LD_LIBRARY_PATH"] = env.pop("LD_LIBRARY_PATH_ORIG")
+    elif FROZEN and os.name != "nt":
+        env.pop("LD_LIBRARY_PATH", None)
+    return env
+
+
 def relaunch(cmd):
     kw = {"start_new_session": True} if os.name != "nt" else \
         {"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP}
-    subprocess.Popen(cmd, close_fds=True, **kw)
+    subprocess.Popen(cmd, close_fds=True, env=clean_env(), **kw)
 
 
 def cleanup_old():

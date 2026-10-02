@@ -231,7 +231,8 @@ class InstallWindow(QWidget):
             self.btn_go.clicked.connect(self._open)
 
     def _open(self):
-        subprocess.Popen([os.path.join(DEST, "portinho")], start_new_session=True)
+        from .updater import clean_env
+        subprocess.Popen([os.path.join(DEST, "portinho")], start_new_session=True, env=clean_env())
         self.close()
 
     def _failed(self, msg):

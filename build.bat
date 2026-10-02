@@ -14,6 +14,8 @@ for /f %%v in ('python -c "import portinho; print(portinho.__version__)"') do se
 set QT_QPA_PLATFORM=offscreen
 python packaging\make_icon.py || goto :erro
 set QT_QPA_PLATFORM=
+if not exist build mkdir build
+python -c "import portinho; open(r'build\portinho_build.txt','w').write(portinho.__version__)" || goto :erro
 
 REM Deno: necessario para o yt-dlp abrir os videos do YouTube
 if not exist build\deno\deno.exe (
@@ -21,7 +23,7 @@ if not exist build\deno\deno.exe (
     powershell -NoProfile -Command "Invoke-WebRequest https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip -OutFile build\deno\deno.zip; Expand-Archive build\deno\deno.zip -DestinationPath build\deno -Force; Remove-Item build\deno\deno.zip" || goto :erro
 )
 
-set COMMON=--noconfirm --windowed --icon assets\icon.ico --add-data "assets;assets" --add-binary "build\deno\deno.exe;." --collect-all imageio_ffmpeg --collect-all yt_dlp_ejs --collect-submodules yt_dlp
+set COMMON=--noconfirm --windowed --icon assets\icon.ico --add-data "assets;assets" --add-data "build\portinho_build.txt;." --add-binary "build\deno\deno.exe;." --collect-all imageio_ffmpeg --collect-all yt_dlp_ejs --collect-submodules yt_dlp
 
 REM 1) pasta para o instalador
 pyinstaller %COMMON% --onedir --name Portinho run.py || goto :erro
