@@ -2,7 +2,19 @@
 
 Troque a música de um vídeo do YouTube por um arquivo do seu PC, alinhando pelo espectrograma.
 
-## Como baixar e instalar (Linux)
+## Como baixar e instalar
+
+### Windows
+
+1. Abra a página de **[Releases](https://github.com/paulocremas/portinho/releases/latest)** e baixe
+   **`Portinho-Setup-1.0.0.exe`**.
+2. Dê **dois cliques** no arquivo baixado e siga *Avançar → Instalar* (não pede senha de administrador).
+   Se aparecer *"O Windows protegeu o computador"*, clique em **Mais informações → Executar assim mesmo**.
+3. Abra o **Portinho** pelo menu Iniciar ou pelo atalho na área de trabalho.
+
+Prefere sem instalar? Baixe **`Portinho.exe`** e é só abrir.
+
+### Linux
 
 1. Abra a página de **[Releases](https://github.com/paulocremas/portinho/releases/latest)** e baixe
    o arquivo **`portinho_1.0.0_amd64.deb`**.
@@ -14,7 +26,6 @@ Troque a música de um vídeo do YouTube por um arquivo do seu PC, alinhando pel
 → *Extrair aqui*, entre na pasta `portinho` e dê dois cliques em **`instalar.sh`** (escolha *Executar*).
 
 Depois de instalado, o Portinho avisa sozinho quando sair uma versão nova.
-*Windows: em breve.*
 
 ## Como usar
 
