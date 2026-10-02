@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Portinho
+GenericName=Sincronizar música com vídeo
+Comment=Troque a música de um vídeo do YouTube alinhando pelo espectrograma
+Exec=portinho %F
+Icon=portinho
+Terminal=false
+Categories=AudioVideo;Audio;Video;
+MimeType=audio/x-wav;audio/wav;audio/mpeg;audio/flac;audio/ogg;audio/mp4;video/mp4;video/x-matroska;video/webm;
+Keywords=youtube;música;áudio;sincronizar;espectrograma;
+StartupWMClass=portinho
