@@ -167,6 +167,51 @@ def semitone_diff(a, b):
     return (tb - ta + 5) % 12 - 5
 
 
+def detect_bpm(flux, fps=FPS, lo=60, hi=200):
+    """Andamento médio (BPM) a partir do fluxo espectral, ou None se não houver pulso claro."""
+    x = np.asarray(flux, dtype=np.float64)
+    if len(x) < fps * 6:
+        return None
+    k = int(fps * 0.4) | 1                        # tira a tendência lenta: sobram os ataques
+    hits = np.maximum(x - np.convolve(x, np.ones(k) / k, mode="same"), 0)
+    # ataques fracos perto do "chão" do áudio (ambiente, plateia, pads): não há pulso para medir
+    if hits.std() < 0.3 * x.mean() or hits.std() < 1e-9:
+        return None
+    x = hits - hits.mean()
+    n = len(x)
+    nfft = 1 << (2 * n - 1).bit_length()
+    spec = np.fft.rfft(x, nfft)
+    ac = np.fft.irfft(spec * np.conj(spec), nfft)[:n]
+    ac /= ac[0]
+
+    def peak(pos):
+        """Máximo local de `ac` perto de `pos`, com interpolação parabólica."""
+        i = int(round(pos))
+        a, b = max(1, i - 2), min(n - 2, i + 2)
+        if a > b:
+            return None
+        j = a + int(np.argmax(ac[a:b + 1]))
+        y0, y1, y2 = ac[j - 1], ac[j], ac[j + 1]
+        den = y0 - 2 * y1 + y2
+        return j + (0.5 * (y0 - y2) / den if den < 0 else 0.0)
+
+    lags = np.arange(int(fps * 60 / hi), int(np.ceil(fps * 60 / lo)) + 1)
+    lags = lags[3 * lags < n]
+    if len(lags) == 0:
+        return None
+    # o pulso verdadeiro também se repete em 2x e 3x o intervalo
+    score = ac[lags] + 0.5 * ac[2 * lags] + 0.25 * ac[3 * lags]
+    # preferência suave por andamentos perto de 120 BPM (evita dobrar/cortar pela metade à toa)
+    bpm = 60 * fps / lags
+    score *= np.exp(-0.5 * (np.log2(bpm / 120) / 1.0) ** 2)
+    best = lags[int(np.argmax(score))]
+    if ac[best] <= 0.2:
+        return None
+    # refina usando os picos em 1x..4x o intervalo (mais precisão que um quadro de ~12 ms)
+    est = [p / m for m in range(1, 5) if m * best + 3 < n and (p := peak(m * best)) is not None]
+    return float(60 * fps / np.median(est))
+
+
 def auto_align(video_flux, music_flux, max_lag_s=None):
     """Retorna d (segundos) tal que tempo_musica = tempo_video + d."""
     v = video_flux - video_flux.mean()

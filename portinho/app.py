@@ -57,6 +57,10 @@ class Bridge(QObject):
     wavReady = Signal(str, str)           # arquivo de áudio baixado, título
 
 
+def fmt_bpm(bpm):
+    return f"{bpm:.1f}".removesuffix(".0").replace(".", ",")
+
+
 def run_bg(fn, *args):
     threading.Thread(target=fn, args=args, daemon=True).start()
 
@@ -102,8 +106,8 @@ class MainWindow(QMainWindow):
         self.music_path = None
         self.video_flux = None
         self.music_flux = None
-        self.video_key = None
-        self.music_key = None
+        self.analysis = {"video": {}, "music": {}}     # tom e BPM detectados
+        self._analysis_ui = {}
         self.busy = set()
 
         # --- reprodução ---
@@ -209,6 +213,7 @@ class MainWindow(QMainWindow):
         self.video_info = QLabel("Sem anúncios · o vídeo toca sem o som original")
         self.video_info.setObjectName("muted")
         vc.addWidget(self.video_info)
+        vc.addWidget(self._analysis_row("video"))
         cards.addWidget(self.video_card, 3)
 
         self.music_card = card()
@@ -228,10 +233,11 @@ class MainWindow(QMainWindow):
         self.dropzone.setMinimumHeight(60)
         self.dropzone.clicked.connect(self.open_music)
         mc.addWidget(self.dropzone)
-        self.key_label = QLabel("")
-        self.key_label.setObjectName("muted")
-        self.key_label.hide()
-        mc.addWidget(self.key_label)
+        mc.addWidget(self._analysis_row("music"))
+        self.compare_label = QLabel("")
+        self.compare_label.setObjectName("muted")
+        self.compare_label.hide()
+        mc.addWidget(self.compare_label)
         cards.addWidget(self.music_card, 2)
         lay.addLayout(cards)
 
@@ -707,8 +713,8 @@ class MainWindow(QMainWindow):
         self.stop()
         self.video_path = path
         self.video_flux = None
-        self.video_key = None
-        self._update_key_compare()
+        self.analysis["video"] = {}
+        self._refresh_analysis()
         self._auto_done = False
         self.timeline.video.duration = 0.0
         self.timeline.video.image = None
@@ -742,8 +748,8 @@ class MainWindow(QMainWindow):
         self.stop()
         self.music_path = path
         self.music_flux = None
-        self.music_key = None
-        self._update_key_compare()
+        self.analysis["music"] = {}
+        self._refresh_analysis()
         self._auto_done = False
         self.timeline.suggestion = None
         self.dropzone.setText(f"♪   {os.path.basename(path)}\nlendo…")
@@ -759,11 +765,12 @@ class MainWindow(QMainWindow):
             mono = data.mean(axis=1)
             rgb, flux = audio.spectrogram(mono)
             result = {"rgb": rgb, "flux": flux, "duration": len(data) / audio.SR, "path": path}
-            try:
-                result["key"] = audio.detect_key(mono)
-            except Exception:
-                log.exception("detecção de tom falhou")
-                result["key"] = None
+            for name, fn, arg in (("key", audio.detect_key, mono), ("bpm", audio.detect_bpm, flux)):
+                try:
+                    result[name] = fn(arg)
+                except Exception:
+                    log.exception("detecção de %s falhou", name)
+                    result[name] = None
             if kind == "music":
                 # para ouvir: taxa original do arquivo, sem reamostrar
                 native = audio.probe_rate(path) or audio.SR
@@ -791,23 +798,19 @@ class MainWindow(QMainWindow):
                 return
             tl.video.set_spectrogram(r["rgb"], audio.FPS, r["duration"])
             self.video_flux = r["flux"]
-            self.video_key = r["key"]
-            if self.video_key:
-                self.video_info.setText(f"{self.video_info.text()}  ·  Tom: {audio.key_name(self.video_key)}")
         else:
             if r["path"] != self.music_path:
                 return
             tl.music.set_spectrogram(r["rgb"], audio.FPS, r["duration"])
             self.mplayer.set_data(r["data"], r["sr"])
             self.music_flux = r["flux"]
-            self.music_key = r["key"]
-            key = f"  ·  Tom: {audio.key_name(self.music_key)}" if self.music_key else ""
             self.dropzone.setText(f"♪   {os.path.basename(r['path'])}\n"
-                                  f"{fmt_time(r['duration'], ms=False)}{key}  ·  clique para trocar")
+                                  f"{fmt_time(r['duration'], ms=False)}  ·  clique para trocar")
             self.dropzone.setProperty("done", True)
             repolish(self.dropzone)
+        self.analysis[kind] = {"key": r["key"], "bpm": r["bpm"]}
         self.busy.discard("analyze_" + kind)
-        self._update_key_compare()
+        self._refresh_analysis()
         if not self._auto_done:
             # até alinhar: começam juntos
             tl.music.offset = tl.video.offset
@@ -820,21 +823,84 @@ class MainWindow(QMainWindow):
         if self.video_flux is not None and self.music_flux is not None and not self._auto_done:
             self.auto_align(silent=True)
 
-    def _update_key_compare(self):
-        a, b = self.video_key, self.music_key
-        if not a or not b:
-            self.key_label.hide()
+    # ================================================================ tom e BPM
+    def _analysis_row(self, kind):
+        """Linha "Tom: … · 128 BPM  ÷2 ×2" de um cartão (escondida até a análise terminar)."""
+        w = QWidget()
+        row = QHBoxLayout(w)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(2)
+        lbl = QLabel("")
+        lbl.setObjectName("muted")
+        row.addWidget(lbl)
+        btns = []
+        for txt, f, tip in (("÷2", 0.5, "Metade do BPM (o detector contou batidas a mais)"),
+                            ("×2", 2.0, "Dobro do BPM (o detector contou só metade das batidas)")):
+            b = QPushButton(txt)
+            b.setObjectName("ghost")
+            b.setCursor(Qt.PointingHandCursor)
+            b.setToolTip(tip)
+            b.clicked.connect(lambda _=False, k=kind, f=f: self._scale_bpm(k, f))
+            row.addWidget(b)
+            btns.append(b)
+        row.addStretch(1)
+        w.hide()
+        self._analysis_ui[kind] = (w, lbl, btns)
+        return w
+
+    def _scale_bpm(self, kind, f):
+        bpm = self.analysis[kind].get("bpm")
+        if bpm:
+            self.analysis[kind]["bpm"] = bpm * f
+            self._refresh_analysis()
+
+    def _refresh_analysis(self):
+        for kind, (w, lbl, btns) in self._analysis_ui.items():
+            info = self.analysis[kind]
+            parts = []
+            if info.get("key"):
+                parts.append(f"Tom: {audio.key_name(info['key'])}")
+            if info.get("bpm"):
+                parts.append(f"{fmt_bpm(info['bpm'])} BPM")
+            lbl.setText("  ·  ".join(parts))
+            for b in btns:
+                b.setVisible(bool(info.get("bpm")))
+            w.setVisible(bool(parts))
+        self._refresh_compare()
+
+    def _refresh_compare(self):
+        v, m = self.analysis["video"], self.analysis["music"]
+        parts, tips = [], []
+        a, b = v.get("key"), m.get("key")
+        if a and b:
+            n = audio.semitone_diff(a, b)
+            if n == 0:
+                parts.append("mesmo tom do vídeo" if a[1] == b[1] else "tom relativo ao do vídeo (mesmas notas)")
+            else:
+                parts.append(f"tom {abs(n)} {'semitons' if abs(n) > 1 else 'semitom'} "
+                             f"{'acima' if n > 0 else 'abaixo'} do vídeo")
+            tips.append(f"Tom — vídeo: {audio.key_name(a)}  ·  música: {audio.key_name(b)}")
+        a, b = v.get("bpm"), m.get("bpm")
+        if a and b:
+            ratio = b / a
+            while ratio > 2 ** 0.5:         # 70 e 140 BPM são o mesmo pulso: fica com o mais próximo
+                ratio /= 2
+            while ratio < 2 ** -0.5:
+                ratio *= 2
+            pct = (ratio - 1) * 100
+            if abs(pct) < 1:
+                parts.append("mesmo andamento")
+            else:
+                parts.append(f"andamento {abs(pct):.0f}% mais {'rápido' if pct > 0 else 'lento'}")
+            tips.append(f"BPM — vídeo: {fmt_bpm(a)}  ·  música: {fmt_bpm(b)}")
+        if not parts:
+            self.compare_label.hide()
             return
-        n = audio.semitone_diff(a, b)
-        if n == 0:
-            txt = "Mesmo tom do vídeo" if a[1] == b[1] else "Tom relativo ao do vídeo (mesmas notas)"
-        else:
-            txt = f"Tom {abs(n)} {'semitons' if abs(n) > 1 else 'semitom'} {'acima' if n > 0 else 'abaixo'} do vídeo"
-        self.key_label.setText(txt)
-        self.key_label.setToolTip(f"Vídeo: {audio.key_name(a)}  ·  Música: {audio.key_name(b)}\n"
-                                  "Estimativa pelas notas mais presentes; pode errar em músicas "
-                                  "com pouca harmonia ou que mudam de tom.")
-        self.key_label.show()
+        txt = "  ·  ".join(parts)
+        self.compare_label.setText(txt[0].upper() + txt[1:])
+        self.compare_label.setToolTip("\n".join(tips) + "\nEstimativas automáticas: podem errar em músicas com "
+                                      "pouca harmonia, sem batida marcada ou que mudam de tom/andamento.")
+        self.compare_label.show()
 
     # ================================================================ alinhamento
     def music_delta(self):
