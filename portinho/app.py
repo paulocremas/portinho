@@ -102,6 +102,8 @@ class MainWindow(QMainWindow):
         self.music_path = None
         self.video_flux = None
         self.music_flux = None
+        self.video_key = None
+        self.music_key = None
         self.busy = set()
 
         # --- reprodução ---
@@ -119,6 +121,8 @@ class MainWindow(QMainWindow):
         self.video_out = False
 
         self.playing = False
+        self.loop = False
+        self._last_loop = 0.0
         self._clock_t0 = 0.0
         self._clock_pos = 0.0
         self._drift = deque(maxlen=6)
@@ -224,6 +228,10 @@ class MainWindow(QMainWindow):
         self.dropzone.setMinimumHeight(60)
         self.dropzone.clicked.connect(self.open_music)
         mc.addWidget(self.dropzone)
+        self.key_label = QLabel("")
+        self.key_label.setObjectName("muted")
+        self.key_label.hide()
+        mc.addWidget(self.key_label)
         cards.addWidget(self.music_card, 2)
         lay.addLayout(cards)
 
@@ -289,6 +297,14 @@ class MainWindow(QMainWindow):
         self.btn_pop.setIconSize(QSize(18, 18))
         self.btn_pop.setToolTip("Abrir o vídeo numa janela separada (feche-a para voltar)")
         self.btn_pop.clicked.connect(self.popout_video)
+        self.btn_loop = QPushButton()
+        self.btn_loop.setObjectName("icon")
+        self.btn_loop.setIcon(icons.make("loop"))
+        self.btn_loop.setIconSize(QSize(18, 18))
+        self.btn_loop.setCheckable(True)
+        self.btn_loop.setToolTip("Repetir: ao acabar, volta para o início da música (L)")
+        self.btn_loop.toggled.connect(lambda on: setattr(self, "loop", on))
+        tr.addWidget(self.btn_loop)
         tr.addWidget(self.btn_full)
         tr.addWidget(self.btn_pop)
         tr.addStretch(1)
@@ -384,7 +400,8 @@ class MainWindow(QMainWindow):
         bl.addWidget(self.timeline, 1)
 
         hint = QLabel("Arrastar = mover  ·  Shift = ajuste fino  ·  Ctrl = sem ímã  ·  clique = ir para o ponto  ·  "
-                      "roda = zoom  ·  Shift+roda / botão direito = rolar  ·  Espaço = tocar  ·  ←/→ = 10 ms  ·  Ctrl+Z = desfazer  ·  F = tela cheia")
+                      "roda = zoom  ·  Shift+roda / botão direito = rolar  ·  Espaço = tocar  ·  ←/→ = 10 ms  ·  Ctrl+Z = desfazer  ·  "
+                      "L = repetir  ·  F = tela cheia")
         hint.setObjectName("hint")
         hint.setMinimumWidth(10)
         bl.addWidget(hint)
@@ -421,6 +438,7 @@ class MainWindow(QMainWindow):
         has_m = self.mplayer.data is not None
         both = self.video_flux is not None and self.music_flux is not None
         self.btn_play.setEnabled(has_v or has_m)
+        self.btn_loop.setEnabled(has_v or has_m)
         self.btn_full.setEnabled(has_v)
         self.btn_pop.setEnabled(has_v)
         for w in (self.offset_spin, self.btn_minus, self.btn_plus):
@@ -689,6 +707,8 @@ class MainWindow(QMainWindow):
         self.stop()
         self.video_path = path
         self.video_flux = None
+        self.video_key = None
+        self._update_key_compare()
         self._auto_done = False
         self.timeline.video.duration = 0.0
         self.timeline.video.image = None
@@ -722,6 +742,8 @@ class MainWindow(QMainWindow):
         self.stop()
         self.music_path = path
         self.music_flux = None
+        self.music_key = None
+        self._update_key_compare()
         self._auto_done = False
         self.timeline.suggestion = None
         self.dropzone.setText(f"♪   {os.path.basename(path)}\nlendo…")
@@ -734,8 +756,14 @@ class MainWindow(QMainWindow):
     def _analyze_worker(self, kind, path):
         try:
             data = audio.decode(path, channels=2)
-            rgb, flux = audio.spectrogram(data.mean(axis=1))
+            mono = data.mean(axis=1)
+            rgb, flux = audio.spectrogram(mono)
             result = {"rgb": rgb, "flux": flux, "duration": len(data) / audio.SR, "path": path}
+            try:
+                result["key"] = audio.detect_key(mono)
+            except Exception:
+                log.exception("detecção de tom falhou")
+                result["key"] = None
             if kind == "music":
                 # para ouvir: taxa original do arquivo, sem reamostrar
                 native = audio.probe_rate(path) or audio.SR
@@ -763,17 +791,23 @@ class MainWindow(QMainWindow):
                 return
             tl.video.set_spectrogram(r["rgb"], audio.FPS, r["duration"])
             self.video_flux = r["flux"]
+            self.video_key = r["key"]
+            if self.video_key:
+                self.video_info.setText(f"{self.video_info.text()}  ·  Tom: {audio.key_name(self.video_key)}")
         else:
             if r["path"] != self.music_path:
                 return
             tl.music.set_spectrogram(r["rgb"], audio.FPS, r["duration"])
             self.mplayer.set_data(r["data"], r["sr"])
             self.music_flux = r["flux"]
+            self.music_key = r["key"]
+            key = f"  ·  Tom: {audio.key_name(self.music_key)}" if self.music_key else ""
             self.dropzone.setText(f"♪   {os.path.basename(r['path'])}\n"
-                                  f"{fmt_time(r['duration'], ms=False)}  ·  clique para trocar")
+                                  f"{fmt_time(r['duration'], ms=False)}{key}  ·  clique para trocar")
             self.dropzone.setProperty("done", True)
             repolish(self.dropzone)
         self.busy.discard("analyze_" + kind)
+        self._update_key_compare()
         if not self._auto_done:
             # até alinhar: começam juntos
             tl.music.offset = tl.video.offset
@@ -785,6 +819,22 @@ class MainWindow(QMainWindow):
         self._refresh_enabled()
         if self.video_flux is not None and self.music_flux is not None and not self._auto_done:
             self.auto_align(silent=True)
+
+    def _update_key_compare(self):
+        a, b = self.video_key, self.music_key
+        if not a or not b:
+            self.key_label.hide()
+            return
+        n = audio.semitone_diff(a, b)
+        if n == 0:
+            txt = "Mesmo tom do vídeo" if a[1] == b[1] else "Tom relativo ao do vídeo (mesmas notas)"
+        else:
+            txt = f"Tom {abs(n)} {'semitons' if abs(n) > 1 else 'semitom'} {'acima' if n > 0 else 'abaixo'} do vídeo"
+        self.key_label.setText(txt)
+        self.key_label.setToolTip(f"Vídeo: {audio.key_name(a)}  ·  Música: {audio.key_name(b)}\n"
+                                  "Estimativa pelas notas mais presentes; pode errar em músicas "
+                                  "com pouca harmonia ou que mudam de tom.")
+        self.key_label.show()
 
     # ================================================================ alinhamento
     def music_delta(self):
@@ -905,8 +955,8 @@ class MainWindow(QMainWindow):
         t = self.current_time()
         dur = self.total_duration()
         if dur and t >= dur - 0.05:
-            self.seek(0.0)
-            t = 0.0
+            t = self.loop_range()[0] if self.loop else 0.0
+            self.seek(t)
         self.playing = True
         if self.video_path:
             self.vplayer.play()
@@ -944,14 +994,44 @@ class MainWindow(QMainWindow):
     def _request_resync(self):
         self._need_resync = True
 
+    def loop_range(self):
+        """Trecho repetido no modo loop: do início ao fim da música (dentro do vídeo)."""
+        dur = self.total_duration()
+        if self.mplayer.data is None:
+            return 0.0, dur
+        d = self.music_delta()
+        start = max(0.0, -d)
+        end = self.timeline.music.duration - d
+        if dur:
+            end = min(end, dur)
+        if end - start < 0.2:          # música fora do vídeo: repete o vídeo todo
+            return 0.0, dur
+        return start, end
+
+    def _loop_restart(self):
+        # o setPosition do vídeo é assíncrono: por alguns ticks a posição ainda é a antiga
+        if time.perf_counter() - self._last_loop > 0.3:
+            self._last_loop = time.perf_counter()
+            self.seek(self.loop_range()[0])
+        if self.video_path and self.vplayer.playbackState() != QMediaPlayer.PlayingState:
+            self.vplayer.play()
+
     def _on_playback_state(self, state):
         if state == QMediaPlayer.StoppedState and self.playing:
-            self.pause()   # fim do vídeo
+            if self.loop:
+                QTimer.singleShot(0, self._loop_restart)   # fim do vídeo: volta ao início
+            else:
+                self.pause()   # fim do vídeo
 
     def _tick(self):
         t = self.current_time()
         tl = self.timeline
         now = time.perf_counter()
+        if self.playing and self.loop:
+            start, end = self.loop_range()
+            if end and t >= end - 0.02 and now - self._last_loop > 0.3:
+                self._loop_restart()
+                t = start
         if self.playing:
             target = t + self.music_delta()
             if self.mplayer.data is not None and self.mplayer.playing:
@@ -1061,6 +1141,8 @@ class MainWindow(QMainWindow):
             self.nudge(step)
         elif e.key() == Qt.Key_Home:
             self.seek(0.0)
+        elif e.key() == Qt.Key_L and self.btn_loop.isEnabled():
+            self.btn_loop.toggle()
         elif e.key() in (Qt.Key_F, Qt.Key_F11):
             self.toggle_fullscreen()
         elif e.key() == Qt.Key_Escape and self.vwin is not None and self.vwin.mode == "fullscreen":

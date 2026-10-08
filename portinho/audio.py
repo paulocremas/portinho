@@ -106,6 +106,67 @@ def spectrogram(mono):
     return img, flux
 
 
+NOTE_NAMES = ["Dó", "Dó♯", "Ré", "Mi♭", "Mi", "Fá", "Fá♯", "Sol", "Lá♭", "Lá", "Si♭", "Si"]
+# perfis de Krumhansl-Kessler: quanto cada grau "pertence" a um tom maior/menor
+_MAJOR = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88])
+_MINOR = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17])
+
+
+def chroma(mono, sr=SR):
+    """Energia média de cada uma das 12 notas (Dó..Si) ao longo do áudio."""
+    n_fft, hop = 8192, 4096                       # ~5 Hz por bin: separa as notas dos graves
+    mono = mono.astype(np.float32)
+    if len(mono) < n_fft:
+        mono = np.pad(mono, (0, n_fft - len(mono)))
+    n_frames = 1 + (len(mono) - n_fft) // hop
+    freqs = np.fft.rfftfreq(n_fft, 1 / sr)
+    band = (freqs >= 55) & (freqs <= 2000)       # Lá1 até ~Si6: onde mora a harmonia
+    pc = np.round(69 + 12 * np.log2(freqs[band] / 440)).astype(int) % 12
+    window = np.hanning(n_fft).astype(np.float32)
+    total = np.zeros(12)
+    for start in range(0, n_frames, 256):
+        stop = min(n_frames, start + 256)
+        idx = (np.arange(start, stop)[:, None] * hop) + np.arange(n_fft)[None, :]
+        mag = np.abs(np.fft.rfft(mono[idx] * window, axis=1))[:, band]
+        # só os picos do espectro (notas), não o "chão" de ruído/bateria
+        peak = np.zeros_like(mag, dtype=bool)
+        peak[:, 1:-1] = (mag[:, 1:-1] > mag[:, :-2]) & (mag[:, 1:-1] >= mag[:, 2:])
+        peak &= mag > np.median(mag, axis=1, keepdims=True) * 4
+        w = np.sqrt(np.where(peak, mag, 0))
+        c = np.zeros((stop - start, 12))
+        for k in range(12):
+            c[:, k] = w[:, pc == k].sum(axis=1)
+        norm = c.sum(axis=1, keepdims=True)
+        total += (c / np.where(norm > 0, norm, 1)).sum(axis=0)   # cada quadro pesa igual
+    return total
+
+
+def detect_key(mono, sr=SR):
+    """Retorna (tônica 0..11, "maior"/"menor", confiança 0..1) ou None se não houver harmonia."""
+    c = chroma(mono, sr)
+    if c.sum() <= 0:
+        return None
+    best = []
+    for mode, prof in (("maior", _MAJOR), ("menor", _MINOR)):
+        for t in range(12):
+            best.append((float(np.corrcoef(c, np.roll(prof, t))[0, 1]), t, mode))
+    best.sort(reverse=True)
+    r, tonic, mode = best[0]
+    return tonic, mode, max(0.0, r)
+
+
+def key_name(key):
+    tonic, mode, _ = key
+    return f"{NOTE_NAMES[tonic]} {mode}"
+
+
+def semitone_diff(a, b):
+    """Semitons para levar o tom `a` até `b` (-5..+6), comparando tons menores pelo relativo maior."""
+    ta = (a[0] + 3) % 12 if a[1] == "menor" else a[0]
+    tb = (b[0] + 3) % 12 if b[1] == "menor" else b[0]
+    return (tb - ta + 5) % 12 - 5
+
+
 def auto_align(video_flux, music_flux, max_lag_s=None):
     """Retorna d (segundos) tal que tempo_musica = tempo_video + d."""
     v = video_flux - video_flux.mean()

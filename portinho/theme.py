@@ -44,6 +44,7 @@ QPushButton#primary:disabled {{ background: #2a2550; border-color: #2a2550; colo
 QPushButton#ghost {{ background: transparent; border: none; color: #8b93a7; padding: 4px 8px; }}
 QPushButton#ghost:hover {{ color: #e8eaf0; }}
 QPushButton#icon {{ padding: 6px 10px; min-width: 18px; }}
+QPushButton#icon:checked {{ background: #2a2550; border-color: {ACCENT}; }}
 QPushButton#play {{ background: white; color: #0d0f14; border: none; border-radius: 23px;
                    min-width: 46px; max-width: 46px; min-height: 46px; max-height: 46px;
                    font-size: 18px; padding: 0; }}
